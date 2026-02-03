@@ -1,0 +1,9 @@
+apiVersion: storage.glimmerfs.io/v1alpha1
+kind: GlimmerFS
+metadata:
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/managed-by: kustomize
+  name: glimmerfs-sample
+spec:
+  # TODO(user): Add fields here

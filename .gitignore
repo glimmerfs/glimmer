@@ -1,0 +1,85 @@
+# .gitignore for Go Kubernetes operator project
+# Generated: February 2026
+
+# Binaries for programs and plugins
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+*.coverprofile
+
+# Build directories and output
+_build/
+build/
+dist/
+out/
+_output/
+
+# Go specific
+# If you vendor dependencies, you can remove the following line
+vendor/
+
+# Temporary object files and caches
+*.tmp
+*.log
+*.cache
+*.pid
+
+# IDEs and editors
+.vscode/
+.idea/
+*.iml
+*.sublime-project
+*.sublime-workspace
+*.swp
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+Thumbs.db
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*.secret
+secrets.yaml
+
+# Kubernetes / kustomize / kubebuilder temporary files
+.kubebuilder/
+.kustomize/
+.kube/
+
+# Certificates, keys
+*.pem
+*.key
+*.crt
+
+# Test result files
+test-results/
+*.junit.xml
+
+# Go tooling cache (often outside repo, but included here for safety)
+# note: GOPATH pkg/mod and build cache are normally outside the repo
+.golangci.yml.cache
+
+# Misc
+coverage/
+coverage-html/
+
+# Ignore local configuration for OS or tools
+/local.settings.json
+
+# Ignore user-specific files created by VS Code extensions
+.vscode/*settings.json
+.vscode/*tasks.json
+
+# Keep this file tracked
+!/.gitignore
