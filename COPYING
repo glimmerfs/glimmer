@@ -1,0 +1,28 @@
+SPDX-FileCopyrightText: 2026 The GlimmerFS Project
+SPDX-License-Identifier: Apache-2.0
+
+This repository is licensed primarily under the Apache License, Version 2.0.
+See the full text at: LICENSES/preferred/Apache-2.0.txt
+
+Exceptions / per-directory licensing:
+- wire/lnet/:                SPDX-License-Identifier: GPL-2.0-only
+- server/manager/:           SPDX-License-Identifier: GPL-2.0-only
+- server/metadata/:          SPDX-License-Identifier: GPL-2.0-only
+
+These directories contain code derived from LustreFS or intentionally
+licensed under GPL v2 to maintain compatibility with the Linux kernel
+and related components. See: LICENSES/preferred/GPL-2.0.txt
+
+License summary (SPDX expressions):
+- Overall repository: Apache-2.0
+- wire/lnet/:           GPL-2.0-only
+- server/manager/:      GPL-2.0-only
+- server/metadata/:     GPL-2.0-only
+
+If you incorporate files from other projects, check individual file
+headers for their SPDX-License-Identifier and SPDX-FileCopyrightText
+notices. If a file lacks explicit SPDX metadata, treat it as Apache-2.0
+unless noted otherwise in the repository documentation or file headers.
+
+For further guidance on using SPDX identifiers and best practices,
+see https://spdx.org and https://docs.kernel.org/process/license-rules.html

@@ -47,7 +47,9 @@ This is used for the Operator and Kubernetes APIs.
 * The LNet interface and Glimmer Storage Services
 are GPL 2.0.
 
+Please refer to [COPYING](COPYING).
+
 ## Trademarks
 
-LustreFS is trademarked by the OpenSFS.
+Lustre and LustreFS are trademarked by the OpenSFS.
 This project has no relationship with OpenSFS.
