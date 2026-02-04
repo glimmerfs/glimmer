@@ -22,6 +22,8 @@ _output/
 # If you vendor dependencies, you can remove the following line
 vendor/
 
+go.work.sum
+
 # Temporary object files and caches
 *.tmp
 *.log

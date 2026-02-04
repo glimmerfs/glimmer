@@ -24,7 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	storagev1alpha1 "github.com/glimmerfs/glimmer/operator/api/v1alpha1"
+	storagev1alpha1 "github.com/glimmerfs/glimmer/pkg/api/v1alpha1"
 )
 
 // GlimmerFSReconciler reconciles a GlimmerFS object
