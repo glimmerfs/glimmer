@@ -33,7 +33,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	storagev1alpha1 "github.com/glimmerfs/glimmer/operator/api/v1alpha1"
+	storagev1alpha1 "github.com/glimmerfs/glimmer/pkg/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 

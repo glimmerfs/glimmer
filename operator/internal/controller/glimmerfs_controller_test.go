@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	storagev1alpha1 "github.com/glimmerfs/glimmer/operator/api/v1alpha1"
+	storagev1alpha1 "github.com/glimmerfs/glimmer/pkg/api/v1alpha1"
 )
 
 var _ = Describe("GlimmerFS Controller", func() {

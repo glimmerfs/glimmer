@@ -35,8 +35,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	storagev1alpha1 "github.com/glimmerfs/glimmer/operator/api/v1alpha1"
 	"github.com/glimmerfs/glimmer/operator/internal/controller"
+	storagev1alpha1 "github.com/glimmerfs/glimmer/pkg/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
