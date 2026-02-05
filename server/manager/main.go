@@ -16,8 +16,20 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 package main
 
-import "github.com/glimmerfs/glimmer/server/manager/cmd"
+import (
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/glimmerfs/glimmer/server/manager/cmd"
+)
 
 func main() {
-	cmd.Execute()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	err := cmd.ExecuteContext(ctx)
+	if err != nil {
+		os.Exit(1)
+	}
 }

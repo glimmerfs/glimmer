@@ -17,8 +17,10 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 package cmd
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"net"
 
 	"github.com/spf13/cobra"
@@ -32,19 +34,33 @@ var lnetDebugCmd = &cobra.Command{
 
 	Only TCP is supported.
 	`,
-	Run: func(cmd *cobra.Command, args []string) {
-		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", Port))
+	RunE: func(cmd *cobra.Command, args []string) error {
+		listenConf := net.ListenConfig{}
+		ctx := cmd.Context()
+		listener, err := listenConf.Listen(ctx, "tcp", fmt.Sprintf(":%d", Port))
 		if err != nil {
-			panic(err)
+			return err
 		}
 		defer listener.Close()
-		fmt.Printf("Glimmer listening on %d...\n", Port)
+		slog.Info("lnet-debug listening", "port", Port)
+
+		context.AfterFunc(ctx, func() {
+			slog.Debug("lnet-debug listener shutting down")
+			listener.Close()
+		})
 
 		for {
+			slog.Debug("lnet-debug waiting for connection")
 			conn, err := listener.Accept()
-			if err == nil {
-				go handleConnection(conn)
+			if err != nil {
+				if ctx.Err() != nil {
+					// Context was cancelled, exit gracefully
+					return nil
+				}
+				slog.Error("Accept Error", "error", err)
+				return err
 			}
+			go handleConnection(conn)
 		}
 	},
 }
