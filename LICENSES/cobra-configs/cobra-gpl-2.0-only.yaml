@@ -3,7 +3,7 @@ author: "GlimmerFS Project"
 # Note that GPL-2.0 in cobra defaults to 2.0-or-later
 # Lustre (which this project is derived from) is restricted to GPL-2.0-only.
 license:
-  header: |
+  header: |-
     SPDX-License-Identifier: GPL-2.0
   # Do not write a separate LICENSE file
   text: ""

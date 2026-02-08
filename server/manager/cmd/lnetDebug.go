@@ -19,6 +19,7 @@ package cmd
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -81,25 +82,54 @@ func init() {
 
 // Constants from lustre_idl.h and socklnd.h
 const (
+	LNetProtoMagic         = 0x45726963 // General proto switcher
 	LNetProtoTCPMagic      = 0xeebc0ded // The Magic Number
 	LNetProtoAcceptorMagic = 0xacce7100 // The "Handshake" Magic
 	Port                   = 988        // Default LNet Port
 )
 
+const (
+	KSockProtoV3 = 3
+)
+
+type HexUInt64 uint64
+type HexUInt32 uint32
+
+func (h HexUInt64) String() string {
+	return fmt.Sprintf("0x%016x", uint64(h))
+}
+
+func (h HexUInt32) String() string {
+	return fmt.Sprintf("0x%08x", uint32(h))
+}
+
 // Matches 'struct lnet_acceptor_connreq' in lustre_idl.h
 type AcceptorConnReq struct {
 	// Magic is read separately first
-	Version uint32 // Protocol version
-	Nid     uint64 // The Client's NID
+	Version HexUInt32 // Protocol version
+	Nid     HexUInt64 // The Client's NID
+}
+
+type ProtoResp struct {
+	Magic   HexUInt32 // LNetProtoAcceptorMagic
+	Version HexUInt32 // Echoed Version
+	Nid     HexUInt64 // The Client's NID
 }
 
 // HelloMsg is the first thing exchanged on a TCP connection
 // Matches 'struct ksock_hello_msg' in socklnd.h
 type HelloMsg struct {
-	TxNID        uint64 // Sender NID
-	Incarnation  uint64 // Connection instance ID
-	Type         uint32 // Message type (HELLO vs NOOP)
-	IsBodyOneReg uint32 // Capability flag
+	// LNetProtoMagic is read first
+	// ProtoV3 is read next
+	SrcNID         HexUInt64 // Sender NID
+	DstNID         HexUInt64 // Receiver NID
+	SrcPID         HexUInt32 // Sender PID
+	DstPID         HexUInt32 // Receiver PID
+	SrcIncarnation HexUInt64 // Sender Incarnation
+	DstIncarnation HexUInt64 // Receiver Incarnation
+	ConnType       HexUInt32 // Connection Type (SOCKLND_CONN_*)
+	NIPs           HexUInt32 // Always 0
+	// IPs uint32[] Unsupported (zero length array)
 }
 
 func handleConnection(conn net.Conn) {
@@ -107,43 +137,78 @@ func handleConnection(conn net.Conn) {
 	remoteAddr := conn.RemoteAddr().String()
 
 	// 1. Read the Magic (First 4 bytes)
-	var magic uint32
+	var magic HexUInt32
 	if err := binary.Read(conn, binary.LittleEndian, &magic); err != nil {
-		fmt.Printf("[%s] Read Error: %v\n", remoteAddr, err)
+		slog.Error("[%s] Read Error: %v\n", remoteAddr, err)
 		return
 	}
+	if magic != LNetProtoAcceptorMagic {
+		slog.Error("Invalid Magic", "addr", remoteAddr, "magic", magic)
+		return
+	}
+	err := handleAcceptor(conn, remoteAddr)
+	if err != nil {
+		slog.Error("Acceptor Handling Error", "addr", remoteAddr, "error", err)
+	}
 
-	// 2. Switch based on Magic
+	// 2. Read based on Protocol
+	if err := binary.Read(conn, binary.LittleEndian, &magic); err != nil {
+		slog.Error("[%s] Read Error: %v\n", remoteAddr, err)
+		return
+	}
 	switch magic {
-	case LNetProtoAcceptorMagic:
-		fmt.Printf("[%s] Magic: ACCEPTOR (0x%x)\n", remoteAddr, magic)
-		handleAcceptor(conn, remoteAddr)
+	case LNetProtoMagic:
+		slog.Info("Magic: Generic", "addr", remoteAddr)
 	case LNetProtoTCPMagic:
-		fmt.Printf("[%s] Magic: TCP/LND (0x%x)\n", remoteAddr, magic)
-		handleHello(conn, remoteAddr)
+		slog.Info("Magic: TCP/LND", "addr", remoteAddr)
 	default:
-		panic(fmt.Sprintf("[%s] UNKNOWN MAGIC: 0x%x\n", remoteAddr, magic))
+		slog.Error("UNKNOWN MAGIC", "addr", remoteAddr, "magic", magic)
+	}
+
+	// 3. Read the Command (Next 4 bytes)
+	var cmd HexUInt32
+	if err := binary.Read(conn, binary.LittleEndian, &cmd); err != nil {
+		slog.Error("[%s] Read Error: %v\n", remoteAddr, err)
+		return
+	}
+	switch cmd {
+	case KSockProtoV3:
+		slog.Info("Received HELLO V3 Command", "addr", remoteAddr)
+		if err := handleHelloV3(conn, remoteAddr); err != nil {
+			slog.Error("Hello Handling Error", "addr", remoteAddr, "error", err)
+		}
+	default:
+		slog.Error("UNKNOWN COMMAND", "addr", remoteAddr, "cmd", cmd)
 	}
 }
 
-func handleAcceptor(conn net.Conn, remoteAddr string) {
+func handleAcceptor(conn net.Conn, remoteAddr string) error {
 	// We already read the magic, so we read the REST of the struct
 	var req AcceptorConnReq
 	if err := binary.Read(conn, binary.LittleEndian, &req); err != nil {
-		fmt.Printf("[%s] Failed to read AcceptorReq: %v\n", remoteAddr, err)
-		return
+		return err
+	}
+	if req.Version != 1 {
+		return errors.New("unsupported LNet protocol version")
 	}
 
-	fmt.Printf("   >>> Client NID: %d (Version: %d)\n", req.Nid, req.Version)
-	fmt.Println("   >>> NOTE: To continue, we must send a response back.")
-	binary.Write(conn, binary.LittleEndian, LNetProtoAcceptorMagic)
+	slog.Info("Acceptor Connection Request", "addr", remoteAddr,
+		"client_nid", req.Nid,
+		"version", req.Version,
+	)
+	return nil
 }
 
-func handleHello(conn net.Conn, remoteAddr string) {
+func handleHelloV3(conn net.Conn, remoteAddr string) error {
 	var hello HelloMsg
 	if err := binary.Read(conn, binary.LittleEndian, &hello); err != nil {
 		fmt.Printf("[%s] Failed to read HelloMsg: %v\n", remoteAddr, err)
-		return
+		return err
 	}
-	fmt.Printf("   >>> Hello TxNID: %d\n", hello.TxNID)
+	slog.Info("Got HELLO V3", "addr", remoteAddr, "hello", hello)
+	if hello.NIPs != 0 {
+		slog.Error("Non-zero NIPs not supported", "addr", remoteAddr, "nips", hello.NIPs)
+		return errors.ErrUnsupported
+	}
+	return nil
 }
