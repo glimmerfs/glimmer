@@ -7,7 +7,6 @@ package lnet
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -27,15 +26,12 @@ type LNetClient struct {
 	Commands CommandRegistry
 }
 
-type RemoteConn struct {
-	Conn      *net.Conn
-	ByteOrder binary.ByteOrder
-	Protocol  ProtocolMagic
-}
-
 // NewLNetClient creates a new LNetClient with default settings.
 func NewLNetClient() LNetClient {
-	return LNetClient{ByteOrder: DEFAULT_BYTE_ORDER, Port: DEFAULT_PORT}
+	client := LNetClient{ByteOrder: DEFAULT_BYTE_ORDER, Port: DEFAULT_PORT}
+	client.Commands = make(CommandRegistry)
+	client.Commands[LNET_MSG_GET] = HandleGet
+	return client
 }
 
 // WithPort returns a copy of the LNetClient with the specified port.
@@ -45,47 +41,40 @@ func (client LNetClient) WithPort(port uint16) LNetClient {
 	return client
 }
 
-// Get the opposite of the current byte order
-func (client *LNetClient) getOppositeByteOrder() (binary.ByteOrder, error) {
-	var nativeBuff [4]byte
-	client.ByteOrder.PutUint32(nativeBuff[:], 0x01020304)
-	switch nativeBuff {
-	case [4]byte{0x04, 0x03, 0x02, 0x01}:
-		// Native is little endian, so other must be big endian
-		return binary.BigEndian, nil
-	case [4]byte{0x01, 0x02, 0x03, 0x04}:
-		// Native is big endian, so other must be little endian
-		return binary.LittleEndian, nil
-	default:
-		return nil, fmt.Errorf("unknown native byte order")
-	}
-}
-
-func (client *LNetClient) Negotiate(ctx context.Context, conn net.Conn) (RemoteConn, error) {
+func (client *LNetClient) handleCommands(ctx context.Context, remote *RemoteConn) error {
 	_ = ctx
-	_ = conn
-	var acceptorMagic ProtocolMagic
-	remote := RemoteConn{Conn: &conn, ByteOrder: client.ByteOrder}
-	err := binary.Read(conn, client.ByteOrder, &acceptorMagic)
-	if err != nil {
-		return remote, fmt.Errorf("failed to read acceptor magic: %w", err)
-	}
-	switch acceptorMagic {
-	case PROTO_MAGIC_ACCEPTOR_REV:
-		slog.Info("Detected reverse byte order from remote, switching byte order for this connection")
-		remote.ByteOrder, err = client.getOppositeByteOrder()
-		if err != nil {
-			return remote, fmt.Errorf("failed to determine opposite byte order: %w", err)
+	for {
+		var messageHeader KSockMessageHeader
+		if err := binary.Read(*remote.Conn, remote.ByteOrder, &messageHeader); err != nil {
+			slog.Error("error reading message header", "error", err, "remote", remote)
+			return err
 		}
-	case PROTO_MAGIC_GENERIC:
-		return remote, fmt.Errorf("Generic protocol not supported by LNetClient yet")
-	case PROTO_MAGIC_ACCEPTOR:
-		slog.Debug("Received valid acceptor magic from remote, proceeding with negotiation")
-	default:
-		return remote, fmt.Errorf("invalid acceptor magic: expected 0x%08x, got 0x%08x", PROTO_MAGIC_ACCEPTOR, acceptorMagic)
+		switch messageHeader.Type {
+		case KSOCK_MSG_NOOP:
+			slog.Info("received NOOP message", "remote", remote)
+		case KSOCK_MSG_LNET:
+			slog.Info("received LNET message", "remote", remote)
+			if messageHeader.Checksum != 0 {
+				slog.Warn("LNET message has non-zero checksum, which is unsupported", "checksum", messageHeader.Checksum, "remote", remote)
+			}
+			message, err := ReadCommand(ctx, remote)
+			if err != nil {
+				slog.Error("error reading LNET message", "error", err, "remote", remote)
+				return err
+			}
+			handler, ok := client.Commands[message.MessageType]
+			if !ok {
+				slog.Warn("no handler registered for message type, ignoring message", "messageType", message.MessageType, "remote", remote)
+				continue
+			}
+			if err := handler(ctx, *remote, message); err != nil {
+				slog.Error("error handling message", "error", err, "messageType", message.MessageType, "remote", remote)
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported message type: %d", messageHeader.Type)
+		}
 	}
-	// TODO: detect actual protocol (e.g., TCP)
-	return remote, errors.ErrUnsupported
 }
 
 func (client *LNetClient) handleConnection(ctx context.Context, conn net.Conn) {
@@ -98,9 +87,18 @@ func (client *LNetClient) handleConnection(ctx context.Context, conn net.Conn) {
 	}()
 	slog.Info("LNetClient accepted connection", "remote", conn.RemoteAddr())
 
-	remote, err := client.Negotiate(ctx, conn)
+	remote := RemoteConn{Conn: &conn, ByteOrder: client.ByteOrder}
+	err := Negotiate(ctx, &remote)
 	if err != nil {
 		slog.Error("LNetClient negotiation failed", "error", err, "remote", remote)
+		return
+	}
+	slog.Info("LNetClient negotiation succeeded", "remote", remote)
+
+	err = client.handleCommands(ctx, &remote)
+	if err != nil {
+		slog.Error("LNetClient command handling failed", "error", err, "remote", remote)
+		panic(err) // abort to limit traffic for now
 		return
 	}
 }

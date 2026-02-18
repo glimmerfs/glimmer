@@ -10,7 +10,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/netip"
 	"regexp"
 	"strconv"
@@ -28,12 +27,19 @@ type NIDHeader struct {
 	NetworkIndex uint16
 }
 
+type RawNID64 uint64
+
 // NID64 is a 64-bit NID that can fit a 32-bit address (e.g., IPv4)
 type NID64 struct {
 	NIDHeader
 	Addr [1]uint32 // One IPv4 address fits into 4 bytes
 	// Non-standard Port field for userland flexibility, not part of Lustre's NID64 structure
 	Port uint16
+}
+
+type RawExtendedNID struct {
+	NIDHeader
+	Addr [4]uint32
 }
 
 // ExtendedNID is a 160-bit NID that can fit a 128-bit address (e.g., IPv6)
@@ -47,6 +53,23 @@ type ExtendedNID struct {
 // Ensure that both NID64 and ExtendedNID implement the NID interface
 var _ NID = (*NID64)(nil)
 var _ NID = (*ExtendedNID)(nil)
+
+func (rawNid RawNID64) ToNID64() NID64 {
+	header := NIDHeader{}
+	addr0 := uint32(rawNid & 0xFFFFFFFF)
+	header.Size = uint8((rawNid >> 56) & 0xFF)
+	header.Type = NetworkType((rawNid >> 48) & 0xFF)
+	header.NetworkIndex = uint16((rawNid >> 32) & 0xFFFF)
+
+	if header.Type == NETWORK_TYPE_ANY {
+		return AnyNID.(NID64)
+	}
+	return NID64{NIDHeader: header, Addr: [1]uint32{addr0}, Port: DEFAULT_PORT}
+}
+
+func (rawNid RawExtendedNID) ToExtendedNID() ExtendedNID {
+	return ExtendedNID{NIDHeader: rawNid.NIDHeader, Addr: rawNid.Addr, Port: DEFAULT_PORT}
+}
 
 // NIDFromAddr creates a NID from a netip.Addr
 func NIDFromAddr(addr netip.Addr, netType NetworkType, netNum uint16, portNum uint16) (NID, error) {
@@ -116,36 +139,29 @@ func ParseNID(s string) (NID, error) {
 
 // ReadNID reads a NID from a reader (e.g., socket)
 // Note that Lustre uses protocol version to determine read length
-func ReadNID(reader io.Reader, byteOrder binary.ByteOrder) (NID, error) {
+func ReadNID(reader io.Reader, byteOrder binary.ByteOrder, versionHint uint32) (NID, error) {
+	_ = versionHint // This may be required in better ExtendedNID cases
+	// TODO: use RawNID64
+	var rawHeader uint64
 	var header NIDHeader
-	err := binary.Read(reader, byteOrder, &header)
+	err := binary.Read(reader, byteOrder, &rawHeader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read NID header: %w", err)
 	}
 
+	addr0 := uint32(rawHeader & 0xFFFFFFFF)
+	header.Size = uint8((rawHeader >> 56) & 0xFF)
+	header.Type = NetworkType((rawHeader >> 48) & 0xFF)
+	header.NetworkIndex = uint16((rawHeader >> 32) & 0xFFFF)
+
 	if header.Type == NETWORK_TYPE_ANY {
-		var addr [1]uint32
-		err := binary.Read(reader, byteOrder, &addr)
-		if err != nil {
-			if err == io.EOF {
-				// If we hit EOF while reading the address, we can still treat this as AnyNID
-				// We do want to still raise for io.EOFUnexpected though
-				slog.Warn("EOF reached while reading AnyNID address", "error", err)
-				return AnyNID, nil
-			}
-			return nil, fmt.Errorf("failed to read NID address: %w", err)
-		}
 		return AnyNID, nil
 	}
 
+	// FIXME: right now, we just rely on Size, but ENID MAY actually have size defined later
 	switch header.Size {
 	case 0:
-		var addr [1]uint32
-		err := binary.Read(reader, byteOrder, &addr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read NID64 address: %w", err)
-		}
-		return NID64{NIDHeader: header, Addr: addr, Port: DEFAULT_PORT}, nil
+		return NID64{NIDHeader: header, Addr: [1]uint32{addr0}, Port: DEFAULT_PORT}, nil
 	case 2:
 		// TODO implement this case later
 		// WARNING: Cannot use with Lustre peers
@@ -153,7 +169,9 @@ func ReadNID(reader io.Reader, byteOrder binary.ByteOrder) (NID, error) {
 	case 12:
 		// YAGNI: We MAY need to handle 1-11 size for extended nid
 		var addr [4]uint32
-		err := binary.Read(reader, byteOrder, &addr)
+		addr[0] = addr0
+		addr123 := addr[1:4]
+		err := binary.Read(reader, byteOrder, &addr123)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read ExtendedNID address: %w", err)
 		}
@@ -166,30 +184,22 @@ func ReadNID(reader io.Reader, byteOrder binary.ByteOrder) (NID, error) {
 	return nil, fmt.Errorf("unsupported NID size: %d", header.Size)
 }
 
-// Extracts the lowest 4 bytes of the address from a NID64, assuming it's an IPv4 address.
-func (nid NID64) AddrBytes() [4]byte {
-	var bytes [4]byte
-	DEFAULT_BYTE_ORDER.PutUint32(bytes[:4], nid.Addr[0])
-	return bytes
-}
-
-// Extracts the packed 128-bit address into 16 bytes
-func (enid ExtendedNID) AddrBytes() [16]byte {
-	var bytes []byte
-	for _, addrValue := range enid.Addr {
-		DEFAULT_BYTE_ORDER.AppendUint32(bytes, addrValue)
-	}
-	return [16]byte(bytes)
-}
-
 // Converts the NID64 to a netip.Addr, assuming it's an IPv4 address.
 func (nid NID64) NetAddr() netip.Addr {
-	return netip.AddrFrom4(nid.AddrBytes())
+	var bytes [4]byte
+	// NOTE: netip.Addr uses Big endian
+	binary.BigEndian.PutUint32(bytes[:4], nid.Addr[0])
+	return netip.AddrFrom4(bytes)
 }
 
 // Converts the ExtendedNID to a netip.Addr, assuming it's an IPv6 address.
 func (enid ExtendedNID) NetAddr() netip.Addr {
-	return netip.AddrFrom16(enid.AddrBytes())
+	var bytes []byte
+	// NOTE: netip.Addr uses Big endian
+	for _, addrValue := range enid.Addr {
+		binary.BigEndian.AppendUint32(bytes, addrValue)
+	}
+	return netip.AddrFrom16([16]byte(bytes))
 }
 
 func (nid NID64) String() string {

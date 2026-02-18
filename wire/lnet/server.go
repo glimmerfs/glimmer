@@ -22,6 +22,12 @@ func NewLNetServer() *LNetServer {
 	return &LNetServer{Client: NewLNetClient()}
 }
 
+// WithPort returns a copy of the LNetServer with the specified port for incoming connections.
+func (server LNetServer) WithPort(port uint16) LNetServer {
+	server.Client = server.Client.WithPort(port)
+	return server
+}
+
 // Listen to connections and dispatch valid connections to handlers
 func (server *LNetServer) Listen(ctx context.Context) error {
 	// YAGNI: support more than just tcp? like o2ib?
