@@ -5,6 +5,7 @@ SPDX-License-Identifier: GPL-2.0
 package lnet
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -30,7 +31,7 @@ type LNetClient struct {
 func NewLNetClient() LNetClient {
 	client := LNetClient{ByteOrder: DEFAULT_BYTE_ORDER, Port: DEFAULT_PORT}
 	client.Commands = make(CommandRegistry)
-	client.Commands[LNET_MSG_GET] = HandleGet
+	client.Commands[LNET_MSG_GET] = client.HandleGet
 	return client
 }
 
@@ -39,6 +40,33 @@ func (client LNetClient) WithPort(port uint16) LNetClient {
 	// Not referring to client via *LNetClient gives us a copy
 	client.Port = port
 	return client
+}
+
+// SendCommand sends an LNet command to the remote connection.
+// TODO: in Lustre, remote may need to be looked up.
+func (client *LNetClient) SendMessage(ctx context.Context, remote *RemoteConn, message LNetMessage) error {
+	_ = ctx
+	if message.LNetCommand == nil {
+		return fmt.Errorf("cannot send LNET message with nil command")
+	}
+	databuf := new(bytes.Buffer)
+	slog.Info("Sending LNET message", "message", message)
+	data, err := message.ToBytes(remote.ByteOrder)
+	if err != nil {
+		return fmt.Errorf("failed to convert LNet message to bytes: %w", err)
+	}
+	messageHeader := KSockMessageHeader{
+		Type:     KSOCK_MSG_LNET,
+		Checksum: 0,
+	}
+	if err := binary.Write(databuf, remote.ByteOrder, messageHeader); err != nil {
+		return fmt.Errorf("failed to write message header: %w", err)
+	}
+	databuf.Write(data)
+	if _, err := (*remote.Conn).Write(databuf.Bytes()); err != nil {
+		return fmt.Errorf("failed to write LNet message: %w", err)
+	}
+	return nil
 }
 
 func (client *LNetClient) handleCommands(ctx context.Context, remote *RemoteConn) error {
@@ -67,7 +95,7 @@ func (client *LNetClient) handleCommands(ctx context.Context, remote *RemoteConn
 				slog.Warn("no handler registered for message type, ignoring message", "messageType", message.MessageType, "remote", remote)
 				continue
 			}
-			if err := handler(ctx, *remote, message); err != nil {
+			if err := handler(ctx, remote, message); err != nil {
 				slog.Error("error handling message", "error", err, "messageType", message.MessageType, "remote", remote)
 				return err
 			}
@@ -99,6 +127,6 @@ func (client *LNetClient) handleConnection(ctx context.Context, conn net.Conn) {
 	if err != nil {
 		slog.Error("LNetClient command handling failed", "error", err, "remote", remote)
 		panic(err) // abort to limit traffic for now
-		return
+		// return
 	}
 }

@@ -7,6 +7,7 @@ Network identifiers and methods.
 package lnet
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ type NID interface {
 	String() string
 	NetAddr() netip.Addr
 	IsAny() bool
+	ToBytes(binary.ByteOrder) ([]byte, error)
 }
 
 type NIDHeader struct {
@@ -184,7 +186,33 @@ func ReadNID(reader io.Reader, byteOrder binary.ByteOrder, versionHint uint32) (
 	return nil, fmt.Errorf("unsupported NID size: %d", header.Size)
 }
 
-// Converts the NID64 to a netip.Addr, assuming it's an IPv4 address.
+// ToBytes converts the NID64 to a byte slice.
+func (nid NID64) ToBytes(byteOrder binary.ByteOrder) ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := binary.Write(buf, byteOrder, nid.NIDHeader); err != nil {
+		return nil, fmt.Errorf("failed to write NID64: %w", err)
+	}
+	if err := binary.Write(buf, byteOrder, nid.Addr); err != nil {
+		return nil, fmt.Errorf("failed to write NID64: %w", err)
+	}
+	// NB: port is nonstandard. do not write for NID64
+	return buf.Bytes(), nil
+}
+
+// ToBytes converts the ExtendedNID to a byte slice.
+func (enid ExtendedNID) ToBytes(byteOrder binary.ByteOrder) ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := binary.Write(buf, byteOrder, enid.NIDHeader); err != nil {
+		return nil, fmt.Errorf("failed to write ExtendedNID: %w", err)
+	}
+	if err := binary.Write(buf, byteOrder, enid.Addr); err != nil {
+		return nil, fmt.Errorf("failed to write ExtendedNID: %w", err)
+	}
+	// NB: port is nonstandard. do not write for ExtendedNID
+	return buf.Bytes(), nil
+}
+
+// NetAddr converts the NID64 to a netip.Addr, assuming it's an IPv4 address.
 func (nid NID64) NetAddr() netip.Addr {
 	var bytes [4]byte
 	// NOTE: netip.Addr uses Big endian
@@ -192,7 +220,7 @@ func (nid NID64) NetAddr() netip.Addr {
 	return netip.AddrFrom4(bytes)
 }
 
-// Converts the ExtendedNID to a netip.Addr, assuming it's an IPv6 address.
+// NetAddr converts the ExtendedNID to a netip.Addr, assuming it's an IPv6 address.
 func (enid ExtendedNID) NetAddr() netip.Addr {
 	var bytes []byte
 	// NOTE: netip.Addr uses Big endian

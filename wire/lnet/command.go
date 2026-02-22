@@ -7,6 +7,7 @@ LNet Command ("message types") handlers.
 package lnet
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -79,7 +80,7 @@ type LNetHelloCommand struct {
 	Type        uint32
 }
 
-type CommandHandler func(ctx context.Context, remote RemoteConn, message LNetMessage) error
+type CommandHandler func(ctx context.Context, remote *RemoteConn, message LNetMessage) error
 type CommandRegistry map[CommandType]CommandHandler
 
 func init() {
@@ -133,17 +134,68 @@ func ReadCommand(ctx context.Context, remote *RemoteConn) (LNetMessage, error) {
 	return message, nil
 }
 
-// SendCommand sends an LNet command to the specified remote connection.
-func SendCommand(ctx context.Context, remote *RemoteConn, message LNetMessage) error {
-	_ = ctx
-	if message.LNetCommand == nil {
-		return fmt.Errorf("cannot send LNET message with nil command")
+func (message *LNetMessage) ToBytes(byteOrder binary.ByteOrder) ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if data, err := message.DestNID.ToBytes(byteOrder); err != nil {
+		return nil, fmt.Errorf("failed to write NID64: %w", err)
+	} else {
+		buf.Write(data)
 	}
-	return nil
+	if data, err := message.SourceNID.ToBytes(byteOrder); err != nil {
+		return nil, fmt.Errorf("failed to write NID64: %w", err)
+	} else {
+		buf.Write(data)
+	}
+	message.LNetHeaderEmbed.PayloadLength = uint32(len(message.Payload))
+	if err := binary.Write(buf, byteOrder, message.LNetHeaderEmbed); err != nil {
+		return nil, fmt.Errorf("failed to write LNetHeaderEmbed: %w", err)
+	}
+	if message.LNetCommand == nil {
+		return nil, fmt.Errorf("cannot write LNet message with nil command")
+	}
+	if err := binary.Write(buf, byteOrder, message.LNetCommand); err != nil {
+		return nil, fmt.Errorf("failed to write LNetCommand: %w", err)
+	}
+	if err := binary.Write(buf, byteOrder, message.Payload); err != nil {
+		return nil, fmt.Errorf("failed to write Payload: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
-func HandleGet(ctx context.Context, remote RemoteConn, message LNetMessage) error {
-	_ = ctx
+// GetReply returns the REPLY message for the given GET message.
+func (message *LNetMessage) GetReply() LNetMessage {
+	command := message.LNetCommand.(*LNetGetCommand)
+	return LNetMessage{
+		DestNID:   message.SourceNID,
+		SourceNID: message.DestNID,
+		LNetHeaderEmbed: LNetHeaderEmbed{
+			DestPID:       message.SourcePID,
+			SourcePID:     message.DestPID,
+			MessageType:   LNET_MSG_REPLY,
+			PayloadLength: 0,
+		},
+		LNetCommand: &LNetReplyCommand{
+			DestWMD: command.ReturnWMD,
+		},
+	}
+}
+
+func (message *LNetMessage) SetPayload(byteOrder binary.ByteOrder, payload any) {
+	buf := new(bytes.Buffer)
+	if err := binary.Write(buf, byteOrder, payload); err != nil {
+		slog.Error("failed to write payload", "error", err, "payload", payload)
+		return
+	}
+	slog.Info("Set payload", "payload", payload, "length", buf.Len())
+	message.Payload = buf.Bytes()
+	message.PayloadLength = uint32(buf.Len())
+}
+
+func (client *LNetClient) HandleGet(ctx context.Context, remote *RemoteConn, message LNetMessage) error {
 	slog.Info("Handling GET command", "remote", remote, "message", message)
+	command := message.LNetCommand.(*LNetGetCommand)
+	if command.MatchBits == LNET_PROTO_PING_MATCHBITS {
+		return client.HandlePing(ctx, remote, message, *command)
+	}
 	return nil
 }
